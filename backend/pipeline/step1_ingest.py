@@ -46,8 +46,9 @@ async def _upload_to_cloudinary(raw_bytes: bytes, filename: str, resume_id: str)
 async def ingest_resume(file: UploadFile, db: Any) -> Dict[str, Any]:
     logger.info("[STEP 1] Receiving resume upload...")
     filename = file.filename or "resume.pdf"
-    if not filename.lower().endswith(".pdf") and file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Only PDF resumes are allowed")
+    supported_extensions = (".pdf", ".docx", ".txt")
+    if not filename.lower().endswith(supported_extensions):
+        raise HTTPException(status_code=400, detail="Only PDF, DOCX, or TXT resumes are allowed")
 
     raw_bytes = await file.read()
     size = len(raw_bytes)

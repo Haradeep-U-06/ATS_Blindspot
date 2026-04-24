@@ -23,11 +23,11 @@ def test_scoring_formula_and_subscores():
     }
     evaluation = {
         "skill_matches": [
-            {"skill": "Python", "candidate_has": True, "confidence": 1.0},
-            {"skill": "FastAPI", "candidate_has": True, "confidence": 0.8},
-            {"skill": "MongoDB", "candidate_has": False, "confidence": 0.0},
-            {"skill": "Docker", "candidate_has": True, "confidence": 0.7},
-            {"skill": "CI/CD", "candidate_has": False, "confidence": 0.0},
+            {"skill": "Python", "candidate_has": True, "confidence": 1.0, "evidence_sources": ["work_experience", "projects"]},
+            {"skill": "FastAPI", "candidate_has": True, "confidence": 0.8, "evidence_sources": ["projects"]},
+            {"skill": "MongoDB", "candidate_has": False, "confidence": 0.0, "evidence_sources": []},
+            {"skill": "Docker", "candidate_has": True, "confidence": 0.7, "evidence_sources": ["github"]},
+            {"skill": "CI/CD", "candidate_has": False, "confidence": 0.0, "evidence_sources": []},
         ],
         "experience_match": {"match_score": 0.9},
         "recommendation": "moderate_fit",
@@ -36,11 +36,12 @@ def test_scoring_formula_and_subscores():
 
     result = ScoreEngine().compute(candidate, job, evaluation)
 
-    assert result.base_score == 29.6
+    assert result.base_score == 51.8
     assert result.preferred_bonus == 5.25
-    assert result.experience_score == 18.0
-    assert result.penalties == 0.0
-    assert result.final_score == 52.85
+    assert result.experience_score == 2.7
+    assert result.enrichment_score == 4.5
+    assert result.penalties == -8.0
+    assert result.final_score == 56.25
 
 
 def test_penalties_for_missing_heavy_skill_no_github_and_low_confidence():
@@ -62,4 +63,4 @@ def test_penalties_for_missing_heavy_skill_no_github_and_low_confidence():
     result = ScoreEngine().compute(candidate, job, evaluation)
 
     assert result.penalties == -13.0
-    assert result.subscores_detail["penalty_detail"] == "1 missing required skill, no GitHub profile, low LLM confidence"
+    assert result.subscores_detail["penalty_detail"] == "1 missing required skill, 1 missing high-weight required skill"

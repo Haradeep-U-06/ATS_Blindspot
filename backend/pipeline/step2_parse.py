@@ -45,13 +45,28 @@ def _extract_with_pdfplumber(raw_pdf_bytes: bytes) -> tuple[str, int]:
         return text, len(pdf.pages)
 
 
-async def extract_text_from_pdf(
+def _extract_with_docx(raw_bytes: bytes) -> tuple[str, int]:
+    from docx import Document
+
+    document = Document(io.BytesIO(raw_bytes))
+    paragraphs = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
+    table_cells = []
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text:
+                    table_cells.append(cell.text)
+    return "\n".join(paragraphs + table_cells), 1
+
+
+async def extract_text_from_resume(
     *,
     resume_id: str,
+    filename: str = "resume.pdf",
     raw_pdf_bytes: Optional[bytes] = None,
     cloudinary_url: Optional[str] = None,
 ) -> str:
-    logger.info("[STEP 2] Extracting text from PDF...")
+    logger.info("[STEP 2] Parsing resume with Python libraries only...")
     if raw_pdf_bytes is None:
         if not cloudinary_url:
             raise ValueError("Either raw_pdf_bytes or cloudinary_url is required")
@@ -59,6 +74,24 @@ async def extract_text_from_pdf(
 
     text = ""
     pages = 0
+    lower_filename = filename.lower()
+    if lower_filename.endswith(".docx"):
+        logger.info("[INFO] Using python-docx parser | resume_id=%s", resume_id)
+        text, pages = _extract_with_docx(raw_pdf_bytes)
+        normalized_docx = _normalize_text(text)
+        if not normalized_docx:
+            raise ValueError("No text could be extracted from resume DOCX")
+        logger.info("[SUCCESS] Resume parsed | parser=python-docx | chars=%s", len(normalized_docx))
+        return normalized_docx
+
+    if lower_filename.endswith(".txt"):
+        logger.info("[INFO] Using plain text parser | resume_id=%s", resume_id)
+        normalized_txt = _normalize_text(raw_pdf_bytes.decode("utf-8", errors="ignore"))
+        if not normalized_txt:
+            raise ValueError("No text could be extracted from resume TXT")
+        logger.info("[SUCCESS] Resume parsed | parser=text | chars=%s", len(normalized_txt))
+        return normalized_txt
+
     try:
         logger.info("[INFO] Using PyMuPDF parser | resume_id=%s", resume_id)
         text, pages = _extract_with_pymupdf(raw_pdf_bytes)
@@ -86,3 +119,17 @@ async def extract_text_from_pdf(
         raise ValueError("No text could be extracted from resume PDF")
     logger.info("[SUCCESS] Extracted %s pages | %s characters", pages, len(normalized))
     return normalized
+
+
+async def extract_text_from_pdf(
+    *,
+    resume_id: str,
+    raw_pdf_bytes: Optional[bytes] = None,
+    cloudinary_url: Optional[str] = None,
+) -> str:
+    return await extract_text_from_resume(
+        resume_id=resume_id,
+        filename="resume.pdf",
+        raw_pdf_bytes=raw_pdf_bytes,
+        cloudinary_url=cloudinary_url,
+    )

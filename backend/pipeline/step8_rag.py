@@ -1,42 +1,75 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from logger import get_logger
-from rag.chunker import chunk_text
+from config import settings
 from rag.embedder import encode_texts
-from rag.faiss_store import FaissJobStore
-from rag.retriever import retrieve_relevant_chunks
+from rag.faiss_store import FaissResumeStore
+from logger import get_logger
 
 logger = get_logger(__name__)
 
 
-async def run_rag_pipeline(
+def jd_tech_skills(job: Dict[str, Any]) -> List[Dict[str, Any]]:
+    seen = set()
+    skills: List[Dict[str, Any]] = []
+    for requirement_type in ("required", "preferred"):
+        for item in job.get(f"{requirement_type}_skills", []) or []:
+            skill = str(item.get("skill", "")).strip()
+            if not skill or skill.lower() in seen:
+                continue
+            seen.add(skill.lower())
+            skills.append(
+                {
+                    "skill": skill,
+                    "weight": float(item.get("weight", 0.0) or 0.0),
+                    "requirement_type": requirement_type,
+                }
+            )
+    return skills
+
+
+async def run_rag_for_resume(
     *,
     resume_id: str,
-    job_id: str,
-    jd_text: str,
-    candidate_embedding: Any,
-    store: FaissJobStore | None = None,
+    job: Dict[str, Any],
+    top_k: int | None = None,
+    store: FaissResumeStore | None = None,
 ) -> Dict[str, Any]:
-    logger.info("[STEP 8] Running RAG pipeline...")
-    faiss_store = store or FaissJobStore(job_id)
-    chunks = chunk_text(jd_text, source_type="job", source_id=job_id)
-    logger.info("[INFO] Chunking JD | job_id=%s | chunks=%s", job_id, len(chunks))
-    already_indexed = any(
-        item.get("metadata", {}).get("source_type") == "job"
-        and item.get("metadata", {}).get("source_id") == job_id
-        for item in faiss_store.metadata
-    )
-    if chunks and not already_indexed:
-        logger.info("[INFO] Adding chunks to FAISS index")
-        embeddings = encode_texts([chunk["text"] for chunk in chunks])
-        faiss_store.add(chunks, embeddings)
-    elif already_indexed:
-        logger.info("[INFO] JD chunks already indexed | job_id=%s", job_id)
+    logger.info("[STEP 8] Running per-resume RAG | resume_id=%s | job_id=%s", resume_id, job.get("job_id"))
+    faiss_store = store or FaissResumeStore(resume_id)
+    skills = jd_tech_skills(job)
+    if not skills:
+        logger.warning("[WARN] No JD technical skills available for retrieval | resume_id=%s", resume_id)
+        return {"evidence_by_skill": {}, "context": "", "chunks": []}
 
-    retrieved = retrieve_relevant_chunks(
-        job_id=job_id,
-        candidate_embedding=candidate_embedding,
-        store=faiss_store,
-    )
-    logger.debug("[DEBUG] RAG retrieval complete | resume_id=%s | chunks=%s", resume_id, len(retrieved["chunks"]))
-    return retrieved
+    evidence_by_skill: Dict[str, List[Dict[str, Any]]] = {}
+    all_chunks: List[Dict[str, Any]] = []
+    limit = top_k or settings.rag_top_k
+    for item in skills:
+        skill = item["skill"]
+        query = f"Explicit evidence that the candidate used {skill} in resume, project, work experience, or external profile"
+        query_vector = encode_texts([query])[0]
+        chunks = faiss_store.search(query_vector, k=limit)
+        evidence_by_skill[skill] = chunks
+        all_chunks.extend(chunks)
+        logger.info(
+            "[SUCCESS] Retrieved %s chunks for %s | resume_id=%s",
+            len(chunks),
+            skill,
+            resume_id,
+        )
+
+    context_parts = []
+    for skill, chunks in evidence_by_skill.items():
+        if not chunks:
+            continue
+        context_parts.append(f"Skill: {skill}")
+        for chunk in chunks:
+            source = (chunk.get("metadata") or {}).get("source_type", "unknown")
+            context_parts.append(f"[{source}] {chunk.get('text', '')}")
+    context = "\n\n".join(context_parts)
+    logger.info("[SUCCESS] Per-resume RAG complete | resume_id=%s | skills=%s", resume_id, len(skills))
+    return {
+        "evidence_by_skill": evidence_by_skill,
+        "context": context,
+        "chunks": all_chunks,
+    }

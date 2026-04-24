@@ -39,6 +39,10 @@ def force_test_embedder(monkeypatch):
     monkeypatch.setattr(settings, "cloudinary_cloud_name", None)
     monkeypatch.setattr(settings, "cloudinary_api_key", None)
     monkeypatch.setattr(settings, "cloudinary_api_secret", None)
+    monkeypatch.setattr(settings, "openrouter_api_key", None)
+    monkeypatch.setattr(settings, "groq_api_key", None)
+    monkeypatch.setattr(settings, "ollama_base_url", "http://127.0.0.1:9")
+    monkeypatch.setattr(settings, "api_timeout_seconds", 0.05)
 
     def _load_model(self):
         self._fallback = True
@@ -96,6 +100,11 @@ class InMemoryCollection:
             self.documents.append(document)
         return type("UpdateResult", (), {"matched_count": 0, "modified_count": 0})()
 
+    async def delete_many(self, query):
+        before = len(self.documents)
+        self.documents = [document for document in self.documents if not _matches(document, query)]
+        return type("DeleteResult", (), {"deleted_count": before - len(self.documents)})()
+
     async def count_documents(self, query):
         return sum(1 for document in self.documents if _matches(document, query))
 
@@ -109,6 +118,7 @@ class InMemoryAsyncDB:
         self.candidates = InMemoryCollection()
         self.scores = InMemoryCollection()
         self.jobs = InMemoryCollection()
+        self.resume_chunks = InMemoryCollection()
 
 
 def _matches(document, query):

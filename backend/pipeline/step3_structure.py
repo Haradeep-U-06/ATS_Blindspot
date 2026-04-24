@@ -1,13 +1,48 @@
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
-from llm.exceptions import JSONRepairError, LLMUnavailableError
-from llm.json_validator import parse_json_response
-from llm.prompts import RESUME_STRUCTURE_PROMPT
-from llm.router import LLMRouter
 from logger import get_logger
 
 logger = get_logger(__name__)
+
+
+KNOWN_TECH_SKILLS = [
+    "Python",
+    "FastAPI",
+    "Django",
+    "Flask",
+    "MongoDB",
+    "PostgreSQL",
+    "MySQL",
+    "SQL",
+    "REST APIs",
+    "GraphQL",
+    "Docker",
+    "Kubernetes",
+    "AWS",
+    "Azure",
+    "GCP",
+    "CI/CD",
+    "Redis",
+    "Celery",
+    "React",
+    "Node.js",
+    "JavaScript",
+    "TypeScript",
+    "Java",
+    "Spring Boot",
+    "Machine Learning",
+    "LangChain",
+    "FAISS",
+    "Git",
+    "GitHub",
+    "HTML",
+    "CSS",
+    "Tailwind",
+    "Next.js",
+    "Express",
+]
 
 
 def _with_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -25,27 +60,63 @@ def _with_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
         "leetcode_username": None,
         "codeforces_username": None,
         "codechef_username": None,
+        "external_links": {},
     }
     defaults.update(data or {})
     return defaults
 
 
-def _extract_username(text: str, service: str) -> str | None:
-    patterns = {
-        "github": [r"github\.com/([A-Za-z0-9-]+)", r"github[:\s]+([A-Za-z0-9-]+)"],
-        "leetcode": [r"leetcode\.com/(?:u/)?([A-Za-z0-9_-]+)", r"leetcode[:\s]+([A-Za-z0-9_-]+)"],
-        "codeforces": [r"codeforces\.com/profile/([A-Za-z0-9_-]+)", r"codeforces[:\s]+([A-Za-z0-9_-]+)"],
-        "codechef": [r"codechef\.com/users/([A-Za-z0-9_-]+)", r"codechef[:\s]+([A-Za-z0-9_-]+)"],
-    }
-    for pattern in patterns.get(service, []):
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return match.group(1).strip().rstrip("/.")
-    return None
+def _username_from_link(link: Optional[str], service: str) -> Optional[str]:
+    if not link:
+        return None
+    value = link.strip().rstrip("/")
+    if not value:
+        return None
+    if "://" not in value and "." not in value:
+        return value
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if not path_parts:
+        return None
+    if service == "leetcode" and path_parts[0] == "u" and len(path_parts) > 1:
+        return path_parts[1]
+    if service == "codeforces" and path_parts[0] == "profile" and len(path_parts) > 1:
+        return path_parts[1]
+    if service == "codechef" and path_parts[0] == "users" and len(path_parts) > 1:
+        return path_parts[1]
+    return path_parts[0]
 
 
-def _fallback_structure_resume(raw_text: str) -> Dict[str, Any]:
-    logger.warning("[WARN] LLM unavailable for resume structuring — using deterministic resume parser")
+def _extract_section(text: str, headings: list[str], max_chars: int = 900) -> str:
+    heading_pattern = "|".join(re.escape(heading) for heading in headings)
+    match = re.search(
+        rf"(?is)(?:^|\n)\s*(?:{heading_pattern})\s*:?\s*\n?(.*?)(?=\n\s*[A-Z][A-Za-z /&-]{{2,}}\s*:?\s*\n|\Z)",
+        text,
+    )
+    return (match.group(1).strip()[:max_chars] if match else "")
+
+
+def _extract_explicit_skills(text: str) -> list[Dict[str, Any]]:
+    lower = text.lower()
+    skills = []
+    for skill in KNOWN_TECH_SKILLS:
+        pattern = re.escape(skill.lower()).replace("\\ ", r"\s+")
+        if re.search(rf"\b{pattern}\b", lower):
+            skills.append({"skill": skill, "source": "resume_explicit", "confidence": 1.0})
+    return skills
+
+
+async def structure_resume(
+    *,
+    resume_id: str,
+    raw_text: str,
+    external_links: Optional[Dict[str, Optional[str]]] = None,
+    llm_router: Any | None = None,
+) -> Dict[str, Any]:
+    logger.info("[STEP 3] Structuring resume deterministically | resume_id=%s", resume_id)
+    if llm_router is not None:
+        logger.info("[INFO] Resume structuring ignores LLM router by design | resume_id=%s", resume_id)
+
     text = raw_text or ""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     email_match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
@@ -59,113 +130,45 @@ def _fallback_structure_resume(raw_text: str) -> Dict[str, Any]:
             name = " ".join(words)
             break
 
-    known_skills = [
-        "Python",
-        "FastAPI",
-        "Django",
-        "Flask",
-        "MongoDB",
-        "PostgreSQL",
-        "MySQL",
-        "SQL",
-        "REST APIs",
-        "GraphQL",
-        "Docker",
-        "Kubernetes",
-        "AWS",
-        "Azure",
-        "GCP",
-        "CI/CD",
-        "Redis",
-        "Celery",
-        "React",
-        "Node.js",
-        "JavaScript",
-        "TypeScript",
-        "Java",
-        "Spring Boot",
-        "Machine Learning",
-        "LangChain",
-        "FAISS",
-        "Git",
-        "GitHub",
-    ]
-    lower = text.lower()
-    skills = []
-    for skill in known_skills:
-        pattern = re.escape(skill.lower()).replace("\\ ", r"\s+")
-        if re.search(rf"\b{pattern}\b", lower):
-            skills.append(skill)
+    external_links = external_links or {}
+    summary = " ".join(lines[:5])[:700] if lines else text[:700]
+    experience_text = _extract_section(text, ["experience", "work experience", "employment"])
+    projects_text = _extract_section(text, ["projects", "project experience"])
+    education_text = _extract_section(text, ["education", "academics"])
 
-    summary = " ".join(lines[:4])[:500] if lines else text[:500]
-    projects = []
-    if "project" in lower:
-        projects.append(
-            {
-                "name": "Resume Project",
-                "description": "Project details extracted from resume text.",
-                "tech_stack": skills[:8],
-                "url": None,
-            }
-        )
-
-    return _with_defaults(
+    profile = _with_defaults(
         {
             "name": name,
             "email": email_match.group(0) if email_match else "",
             "phone": phone_match.group(0).strip() if phone_match else "",
             "summary": summary,
-            "skills": skills,
+            "skills": _extract_explicit_skills(text),
             "experience": [
-                {
-                    "company": "",
-                    "role": "",
-                    "duration": "",
-                    "description": summary,
-                }
+                {"company": "", "role": "", "duration": "", "description": experience_text}
             ]
-            if summary
+            if experience_text
             else [],
-            "education": [],
-            "projects": projects,
+            "education": [
+                {"institution": "", "degree": education_text[:300], "year": ""}
+            ]
+            if education_text
+            else [],
+            "projects": [
+                {"name": "Resume Project Evidence", "description": projects_text, "tech_stack": [], "url": None}
+            ]
+            if projects_text
+            else [],
             "certifications": [],
-            "github_username": _extract_username(text, "github"),
-            "leetcode_username": _extract_username(text, "leetcode"),
-            "codeforces_username": _extract_username(text, "codeforces"),
-            "codechef_username": _extract_username(text, "codechef"),
+            "github_username": _username_from_link(external_links.get("github"), "github"),
+            "leetcode_username": _username_from_link(external_links.get("leetcode"), "leetcode"),
+            "codeforces_username": _username_from_link(external_links.get("codeforces"), "codeforces"),
+            "codechef_username": _username_from_link(external_links.get("codechef"), "codechef"),
+            "external_links": external_links,
         }
     )
-
-
-async def structure_resume(
-    *,
-    resume_id: str,
-    raw_text: str,
-    llm_router: LLMRouter | None = None,
-) -> Dict[str, Any]:
-    logger.info("[STEP 3] Structuring resume with LLM...")
-    router = llm_router or LLMRouter()
-    prompt = RESUME_STRUCTURE_PROMPT.format(resume_text=raw_text[:15000])
-    logger.debug("[DEBUG] Prompt sent | tokens_estimate=%s", max(1, len(prompt) // 4))
-    try:
-        response = await router.generate(prompt, task="structuring")
-        parsed = await parse_json_response(
-            response,
-            repair_callback=lambda repair_prompt: router.generate(repair_prompt, task="repair"),
-            resume_id=resume_id,
-        )
-    except (LLMUnavailableError, JSONRepairError) as exc:
-        logger.warning("[WARN] Resume LLM structuring failed — fallback active | resume_id=%s | error=%s", resume_id, exc)
-        parsed = _fallback_structure_resume(raw_text)
-    structured = _with_defaults(parsed)
     logger.info(
-        "[SUCCESS] Valid JSON received | sections=%s | skills_count=%s",
-        len(structured.keys()),
-        len(structured.get("skills", [])),
+        "[SUCCESS] Resume structured without LLM | resume_id=%s | explicit_skills=%s",
+        resume_id,
+        len(profile["skills"]),
     )
-    logger.debug(
-        "[DEBUG] github_username=%s | leetcode_username=%s",
-        structured.get("github_username"),
-        structured.get("leetcode_username"),
-    )
-    return structured
+    return profile

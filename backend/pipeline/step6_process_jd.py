@@ -1,7 +1,7 @@
 import re
 from typing import Any, Dict, List
 
-from db.models import JobDocument, WeightedSkill, model_to_dict
+from db.models import JobDocument, WeightedSkill, model_to_dict, new_id
 from llm.exceptions import LLMUnavailableError
 from llm.json_validator import JSONRepairError
 from llm.json_validator import parse_json_response
@@ -25,6 +25,32 @@ def _normalize_weights(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         equal = 1.0 / len(cleaned)
         return [{**item, "weight": equal} for item in cleaned]
     return [{**item, "weight": item["weight"] / total} for item in cleaned]
+
+
+def _skills_in_text(text: str, known_skills: List[str]) -> List[str]:
+    lower = (text or "").lower()
+    found = []
+    for skill in known_skills:
+        pattern = re.escape(skill.lower()).replace("\\ ", r"\s+")
+        if re.search(rf"\b{pattern}\b", lower):
+            found.append(skill)
+    return found
+
+
+def _labeled_skill_sections(jd_text: str, known_skills: List[str]) -> tuple[List[str], List[str]]:
+    required_match = re.search(
+        r"(?is)(?:required(?:\s+skills)?(?:\s+include)?|must[-\s]?have)\s*:?\s*"
+        r"(.*?)(?=(?:preferred|nice[-\s]?to[-\s]?have|bonus)\s*:|\Z)",
+        jd_text,
+    )
+    preferred_match = re.search(
+        r"(?is)(?:preferred(?:\s+skills)?|nice[-\s]?to[-\s]?have|bonus)\s*:?\s*(.*?)(?=\Z)",
+        jd_text,
+    )
+    required = _skills_in_text(required_match.group(1), known_skills) if required_match else []
+    preferred = _skills_in_text(preferred_match.group(1), known_skills) if preferred_match else []
+    preferred = [skill for skill in preferred if skill not in required]
+    return required, preferred
 
 
 def _fallback_process_jd(jd_text: str) -> Dict[str, Any]:
@@ -60,19 +86,19 @@ def _fallback_process_jd(jd_text: str) -> Dict[str, Any]:
         "LangChain",
         "FAISS",
     ]
-    found = []
-    for skill in known_skills:
-        pattern = re.escape(skill.lower()).replace("\\ ", r"\s+")
-        if re.search(rf"\b{pattern}\b", lower):
-            found.append(skill)
+    found = _skills_in_text(text, known_skills)
+    required_source, preferred_source = _labeled_skill_sections(text, known_skills)
+    if not required_source and not preferred_source:
+        required_count = min(max(1, len(found) - 2), len(found)) if found else 0
+        required_source = found[:required_count] if required_count else []
+        preferred_source = found[required_count:] if found else []
+    elif not required_source:
+        required_source = [skill for skill in found if skill not in preferred_source]
+    elif not preferred_source:
+        preferred_source = [skill for skill in found if skill not in required_source and skill not in preferred_source]
 
-    if not found:
-        found = ["Communication", "Problem Solving"]
-
-    required_count = min(max(1, len(found) - 2), len(found))
-    required = [{"skill": skill, "weight": 1.0 / required_count} for skill in found[:required_count]]
-    preferred_source = found[required_count:] or found[:1]
-    preferred = [{"skill": skill, "weight": 1.0 / len(preferred_source)} for skill in preferred_source]
+    required = [{"skill": skill, "weight": 1.0 / len(required_source)} for skill in required_source] if required_source else []
+    preferred = [{"skill": skill, "weight": 1.0 / len(preferred_source)} for skill in preferred_source] if preferred_source else []
 
     exp_match = re.search(r"(\d+)\+?\s*(?:years|yrs)", lower)
     experience_years_min = int(exp_match.group(1)) if exp_match else 0
@@ -85,8 +111,7 @@ def _fallback_process_jd(jd_text: str) -> Dict[str, Any]:
     if "data" in lower:
         title = "Data Engineer"
 
-    technical_hits = len([skill for skill in found if skill not in {"Communication", "Problem Solving"}])
-    tech_ratio = 0.85 if technical_hits else 0.35
+    tech_ratio = 1.0 if found else 0.0
 
     return {
         "title": title,
@@ -102,17 +127,41 @@ def _fallback_process_jd(jd_text: str) -> Dict[str, Any]:
     }
 
 
-async def process_job_description(
+async def create_job_record(
     *,
     jd_text: str,
     db: Any,
     hr_user_id: str = "default_hr",
     llm_router: LLMRouter | None = None,
 ) -> Dict[str, Any]:
-    logger.info("[STEP 6] Processing Job Description...")
+    logger.info("[INFO] JD uploaded")
+    logger.info("[STEP] Structuring JD tech stack before opening applications")
+    job = await process_job_description(
+        jd_text=jd_text,
+        db=db,
+        hr_user_id=hr_user_id,
+        llm_router=llm_router,
+        application_window_closed=False,
+        evaluation_status="not_started",
+    )
+    logger.info("[SUCCESS] JD stored | job_id=%s | status=%s", job["job_id"], job["evaluation_status"])
+    return job
+
+
+async def process_job_description(
+    *,
+    jd_text: str,
+    db: Any,
+    hr_user_id: str = "default_hr",
+    job_id: str | None = None,
+    llm_router: LLMRouter | None = None,
+    application_window_closed: bool | None = None,
+    evaluation_status: str = "processing",
+) -> Dict[str, Any]:
+    logger.info("[STEP 6] Processing Job Description for evaluation...")
     logger.info("[INFO] JD text length: %s chars", len(jd_text or ""))
     router = llm_router or LLMRouter()
-    logger.info("[INFO] Calling Gemini for JD structuring...")
+    logger.info("[INFO] Calling LLM router for JD tech-stack structuring...")
     try:
         response = await router.generate(JD_STRUCTURE_PROMPT.format(jd_text=jd_text), task="jd_structuring")
         parsed = await parse_json_response(
@@ -125,6 +174,7 @@ async def process_job_description(
     parsed["required_skills"] = _normalize_weights(parsed.get("required_skills", []))
     parsed["preferred_skills"] = _normalize_weights(parsed.get("preferred_skills", []))
     job = JobDocument(
+        job_id=job_id or new_id("job"),
         hr_user_id=hr_user_id,
         title=parsed.get("title", "Untitled Role"),
         raw_jd_text=jd_text,
@@ -134,9 +184,14 @@ async def process_job_description(
         domain=parsed.get("domain", ""),
         tech_vs_nontechnical_ratio=float(parsed.get("tech_vs_nontechnical_ratio", 1.0) or 1.0),
         key_responsibilities=parsed.get("key_responsibilities", []),
+        application_window_closed=application_window_closed if application_window_closed is not None else bool(job_id),
+        evaluation_status=evaluation_status,
     )
     document = model_to_dict(job)
-    await db.jobs.insert_one(document)
+    if job_id:
+        await db.jobs.update_one({"job_id": job_id}, {"$set": document})
+    else:
+        await db.jobs.insert_one(document)
     logger.info(
         "[SUCCESS] JD parsed | title=%s | required_skills=%s | preferred_skills=%s",
         job.title,

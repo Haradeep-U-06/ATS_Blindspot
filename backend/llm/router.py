@@ -2,8 +2,9 @@ from typing import Optional
 
 from config import settings
 from llm.exceptions import LLMUnavailableError
-from llm.gemini_client import GeminiClient
+from llm.groq_client import GroqClient
 from llm.ollama_client import OllamaClient
+from llm.openrouter_client import OpenRouterClient
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -12,10 +13,12 @@ logger = get_logger(__name__)
 class LLMRouter:
     def __init__(
         self,
-        gemini_client: Optional[GeminiClient] = None,
+        openrouter_client: Optional[OpenRouterClient] = None,
+        groq_client: Optional[GroqClient] = None,
         ollama_client: Optional[OllamaClient] = None,
     ) -> None:
-        self.gemini = gemini_client or GeminiClient()
+        self.openrouter = openrouter_client or OpenRouterClient()
+        self.groq = groq_client or GroqClient()
         self.ollama = ollama_client or OllamaClient()
 
     async def generate(
@@ -26,38 +29,29 @@ class LLMRouter:
         model_name: Optional[str] = None,
         temperature: float = 0.2,
     ) -> str:
-        chosen_model = model_name
-        if chosen_model is None:
-            chosen_model = (
-                settings.gemini_evaluation_model
-                if task == "evaluation"
-                else settings.gemini_structuring_model
-            )
-
         last_error: Exception | None = None
-        for attempt in range(2):
+        providers = [
+            ("OpenRouter", self.openrouter, model_name or settings.openrouter_model),
+            ("Groq", self.groq, settings.groq_model),
+            ("Ollama", self.ollama, settings.ollama_model),
+        ]
+        for provider_name, provider, chosen_model in providers:
             try:
-                return await self.gemini.generate(
+                logger.info("[STEP] LLM request | provider=%s | task=%s", provider_name, task)
+                response = await provider.generate(
                     prompt,
                     model_name=chosen_model,
                     temperature=temperature,
                 )
+                logger.info("[SUCCESS] LLM request complete | provider=%s | task=%s", provider_name, task)
+                return response
             except Exception as exc:
                 last_error = exc
                 logger.warning(
-                    "[WARN] Gemini failed | attempt=%s | task=%s | error=%s",
-                    attempt + 1,
+                    "[WARN] LLM provider failed | provider=%s | task=%s | error=%s",
+                    provider_name,
                     task,
                     exc,
                 )
-
-        logger.warning("[WARN] Gemini failed — activating Ollama fallback | task=%s", task)
-        try:
-            return await self.ollama.generate(
-                prompt,
-                model_name=settings.ollama_model,
-                temperature=temperature,
-            )
-        except Exception as exc:
-            logger.error("[ERROR] Both LLMs failed | task=%s | error=%s", task, exc)
-            raise LLMUnavailableError(str(exc)) from last_error or exc
+        logger.error("[ERROR] All LLM providers failed | task=%s", task)
+        raise LLMUnavailableError(str(last_error or "No LLM provider available"))

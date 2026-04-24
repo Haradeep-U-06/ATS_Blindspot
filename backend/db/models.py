@@ -24,9 +24,13 @@ class ResumeStatus(str, Enum):
     uploaded = "uploaded"
     parsing = "parsing"
     enriching = "enriching"
+    vectorizing = "vectorizing"
+    ready_for_evaluation = "ready_for_evaluation"
+    evaluating = "evaluating"
     scoring = "scoring"
     completed = "completed"
     parse_failed = "parse_failed"
+    vector_failed = "vector_failed"
     failed = "failed"
 
 
@@ -64,16 +68,20 @@ class ProjectItem(BaseModel):
 class ResumeDocument(BaseModel):
     resume_id: str = Field(default_factory=lambda: new_id("resume"))
     candidate_id: Optional[str] = None
+    job_id: Optional[str] = None
     cloudinary_url: Optional[str] = None
     filename: str
     upload_timestamp: datetime = Field(default_factory=utc_now)
     status: ResumeStatus = ResumeStatus.uploaded
+    raw_text: Optional[str] = None
+    chunk_count: int = 0
     error_message: Optional[str] = None
 
 
 class CandidateDocument(BaseModel):
     candidate_id: str = Field(default_factory=lambda: new_id("candidate"))
     resume_id: str
+    job_id: Optional[str] = None
     name: str = ""
     email: str = ""
     phone: str = ""
@@ -87,6 +95,7 @@ class CandidateDocument(BaseModel):
     leetcode_username: Optional[str] = None
     codeforces_username: Optional[str] = None
     codechef_username: Optional[str] = None
+    external_links: Dict[str, Optional[str]] = Field(default_factory=dict)
     github_data: Dict[str, Any] = Field(default_factory=dict)
     leetcode_data: Dict[str, Any] = Field(default_factory=dict)
     codeforces_data: Dict[str, Any] = Field(default_factory=dict)
@@ -99,6 +108,7 @@ class CandidateDocument(BaseModel):
 class ScoreDocument(BaseModel):
     score_id: str = Field(default_factory=lambda: new_id("score"))
     candidate_id: str
+    resume_id: Optional[str] = None
     job_id: str
     final_score: float
     base_score: float
@@ -110,6 +120,8 @@ class ScoreDocument(BaseModel):
     strengths: List[str] = Field(default_factory=list)
     gaps: List[str] = Field(default_factory=list)
     skill_matches: List[Dict[str, Any]] = Field(default_factory=list)
+    evidence_chunks: Dict[str, Any] = Field(default_factory=dict)
+    overall_explanation: str = ""
     subscores_detail: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -126,6 +138,9 @@ class JobDocument(BaseModel):
     tech_vs_nontechnical_ratio: float = 1.0
     key_responsibilities: List[str] = Field(default_factory=list)
     embedding_b64: Optional[str] = None
+    application_window_closed: bool = False
+    evaluation_status: str = "not_started"
+    evaluation_error: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

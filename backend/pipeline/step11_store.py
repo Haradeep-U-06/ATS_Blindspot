@@ -7,6 +7,63 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 
+async def persist_vectorized_candidate(
+    *,
+    db: Any,
+    resume_id: str,
+    job_id: str,
+    raw_text: str,
+    candidate_profile: Dict[str, Any],
+    chunk_count: int,
+) -> Dict[str, Any]:
+    logger.info("[STEP 11] Persisting parsed/vectorized candidate | resume_id=%s", resume_id)
+    existing_resume = await db.resumes.find_one({"resume_id": resume_id}) or {}
+    candidate_id = existing_resume.get("candidate_id") or candidate_profile.get("candidate_id")
+    candidate_doc = CandidateDocument(
+        candidate_id=candidate_id or CandidateDocument(resume_id=resume_id).candidate_id,
+        resume_id=resume_id,
+        job_id=job_id,
+        name=candidate_profile.get("name", ""),
+        email=candidate_profile.get("email", ""),
+        phone=candidate_profile.get("phone", ""),
+        summary=candidate_profile.get("summary", ""),
+        skills=candidate_profile.get("skills", []),
+        experience=candidate_profile.get("experience", []),
+        education=candidate_profile.get("education", []),
+        projects=candidate_profile.get("projects", []),
+        certifications=candidate_profile.get("certifications", []),
+        github_username=candidate_profile.get("github_username"),
+        leetcode_username=candidate_profile.get("leetcode_username"),
+        codeforces_username=candidate_profile.get("codeforces_username"),
+        codechef_username=candidate_profile.get("codechef_username"),
+        external_links=candidate_profile.get("external_links", {}),
+        github_data=candidate_profile.get("github_data", {}),
+        leetcode_data=candidate_profile.get("leetcode_data", {}),
+        codeforces_data=candidate_profile.get("codeforces_data", {}),
+        codechef_data=candidate_profile.get("codechef_data", {}),
+    )
+    await db.candidates.update_one(
+        {"candidate_id": candidate_doc.candidate_id},
+        {"$set": model_to_dict(candidate_doc)},
+        upsert=True,
+    )
+    await db.resumes.update_one(
+        {"resume_id": resume_id},
+        {
+            "$set": {
+                "candidate_id": candidate_doc.candidate_id,
+                "job_id": job_id,
+                "raw_text": raw_text,
+                "chunk_count": chunk_count,
+                "status": ResumeStatus.ready_for_evaluation.value,
+                "error_message": None,
+            }
+        },
+    )
+    logger.info("[SUCCESS] Resume ready for evaluation | resume_id=%s | chunks=%s", resume_id, chunk_count)
+    return {"candidate_id": candidate_doc.candidate_id, "resume_id": resume_id, "chunk_count": chunk_count}
+
+
 async def persist_results(
     *,
     db: Any,
@@ -26,6 +83,7 @@ async def persist_results(
     candidate_doc = CandidateDocument(
         candidate_id=candidate_id or CandidateDocument(resume_id=resume_id).candidate_id,
         resume_id=resume_id,
+        job_id=job_id,
         name=candidate_profile.get("name", ""),
         email=candidate_profile.get("email", ""),
         phone=candidate_profile.get("phone", ""),
@@ -39,6 +97,7 @@ async def persist_results(
         leetcode_username=candidate_profile.get("leetcode_username"),
         codeforces_username=candidate_profile.get("codeforces_username"),
         codechef_username=candidate_profile.get("codechef_username"),
+        external_links=candidate_profile.get("external_links", {}),
         github_data=candidate_profile.get("github_data", {}),
         leetcode_data=candidate_profile.get("leetcode_data", {}),
         codeforces_data=candidate_profile.get("codeforces_data", {}),
@@ -55,6 +114,7 @@ async def persist_results(
 
     score_doc = ScoreDocument(
         candidate_id=candidate_doc.candidate_id,
+        resume_id=resume_id,
         job_id=job_id,
         final_score=score_result.final_score,
         base_score=score_result.base_score,
@@ -66,6 +126,11 @@ async def persist_results(
         strengths=evaluation.get("strengths", []),
         gaps=evaluation.get("gaps", []),
         skill_matches=evaluation.get("skill_matches", []),
+        evidence_chunks={
+            item.get("skill", ""): item.get("evidence", [])
+            for item in evaluation.get("skill_matches", []) or []
+        },
+        overall_explanation=evaluation.get("overall_match_summary", ""),
         subscores_detail={**score_result.subscores_detail, "jd_embedding_b64": jd_embedding_b64},
     )
     logger.info("[INFO] Writing score | score=%.2f | job_id=%s", score_doc.final_score, job_id)

@@ -5,6 +5,36 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 
+def _structured_resume_summary(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "headline": candidate.get("summary", ""),
+        "experience": candidate.get("experience", []),
+        "projects": candidate.get("projects", []),
+        "education": candidate.get("education", []),
+        "certifications": candidate.get("certifications", []),
+    }
+
+
+def _score_breakdown(score: Dict[str, Any]) -> Dict[str, Any]:
+    details = score.get("subscores_detail", {}) or {}
+    return {
+        "base_score": score.get("base_score", 0),
+        "preferred_bonus": score.get("preferred_bonus", 0),
+        "experience_score": score.get("experience_score", 0),
+        "enrichment_score": score.get("enrichment_score", 0),
+        "penalties": score.get("penalties", 0),
+        "required_skill_score": score.get("base_score", 0),
+        "preferred_skill_score": score.get("preferred_bonus", 0),
+        "evidence_quality_score": score.get("experience_score", 0),
+        "required_weighted_match": details.get("required_weighted_match", 0),
+        "preferred_weighted_match": details.get("preferred_weighted_match", 0),
+        "evidence_quality": details.get("evidence_quality", 0),
+        "confidence_score": details.get("confidence_score", 0),
+        "penalty_detail": details.get("penalty_detail", "none"),
+        "formula": details.get("formula", {}),
+    }
+
+
 async def rank_candidates(
     *,
     db: Any,
@@ -24,6 +54,7 @@ async def rank_candidates(
     ranked = []
     for index, score in enumerate(scores, start=skip + 1):
         candidate = await db.candidates.find_one({"candidate_id": score["candidate_id"]}) or {}
+        subscores_detail = score.get("subscores_detail", {}) or {}
         ranked.append(
             {
                 "rank": index,
@@ -31,16 +62,18 @@ async def rank_candidates(
                 "name": candidate.get("name", ""),
                 "email": candidate.get("email", ""),
                 "summary": candidate.get("summary", ""),
+                "resume_summary": _structured_resume_summary(candidate),
                 "skills": candidate.get("skills", []),
                 "final_score": score.get("final_score", 0),
                 "recommendation": score.get("recommendation"),
-                "score_breakdown": {
-                    "base_score": score.get("base_score", 0),
-                    "preferred_bonus": score.get("preferred_bonus", 0),
-                    "experience_score": score.get("experience_score", 0),
-                    "enrichment_score": score.get("enrichment_score", 0),
-                    "penalties": score.get("penalties", 0),
-                },
+                "pros": score.get("strengths", []),
+                "cons": score.get("gaps", []),
+                "strengths": score.get("strengths", []),
+                "gaps": score.get("gaps", []),
+                "overall_explanation": score.get("overall_explanation", ""),
+                "skill_scores": subscores_detail.get("skill_scores", []),
+                "skill_matches": score.get("skill_matches", []),
+                "score_breakdown": _score_breakdown(score),
             }
         )
     if ranked:

@@ -1,57 +1,8 @@
 JSON_ONLY_SUFFIX = "Return ONLY valid JSON. No markdown code blocks. No explanation text."
 
-RESUME_STRUCTURE_PROMPT = """
-Extract the following from the resume text and return a JSON object with these exact keys:
-- name (string)
-- email (string)
-- phone (string)
-- summary (string)
-- skills (array of strings)
-- experience (array of objects: {{company, role, duration, description}})
-- education (array of objects: {{institution, degree, year}})
-- projects (array of objects: {{name, description, tech_stack, url}})
-- certifications (array of strings)
-- github_username (string or null)
-- leetcode_username (string or null)
-- codeforces_username (string or null)
-- codechef_username (string or null)
-
-Resume text:
-{resume_text}
-
-Example output:
-{{
-  "name": "Jane Doe",
-  "email": "jane@example.com",
-  "phone": "+1-555-123-4567",
-  "summary": "Backend engineer with FastAPI experience.",
-  "skills": ["Python", "FastAPI", "MongoDB"],
-  "experience": [{{"company": "Acme", "role": "Engineer", "duration": "2022-2024", "description": "Built APIs."}}],
-  "education": [{{"institution": "State University", "degree": "BS CS", "year": "2021"}}],
-  "projects": [{{"name": "ATS", "description": "Resume parser", "tech_stack": ["Python"], "url": null}}],
-  "certifications": [],
-  "github_username": "janedoe",
-  "leetcode_username": null,
-  "codeforces_username": null,
-  "codechef_username": null
-}}
-""" + JSON_ONLY_SUFFIX
-
-SKILL_INFERENCE_PROMPT = """
-Given a candidate's resume skills, projects, work experience, and GitHub repositories, infer additional technical skills they likely possess but did not explicitly list.
-For each inferred skill, return a JSON array of objects with keys:
-- skill (string)
-- confidence (float 0.0-1.0)
-- source (string: "github" | "projects" | "experience" | "leetcode")
-
-Only include skills with confidence >= 0.6. Maximum 15 inferred skills.
-
-Candidate context:
-{candidate_context}
-""" + JSON_ONLY_SUFFIX
-
 JD_STRUCTURE_PROMPT = """
-Parse this Job Description and return a JSON object with:
+Parse this Job Description and return a JSON object with only the technical stack needed for scoring.
+Do not include soft skills, responsibilities, personality traits, or inferred skills.
 - title (string)
 - required_skills (array of objects: {{skill, weight}} where weight is float 0.0-1.0)
 - preferred_skills (array of objects: {{skill, weight}})
@@ -78,10 +29,11 @@ Example output:
 """ + JSON_ONLY_SUFFIX
 
 EVALUATION_PROMPT = """
-You are an expert technical recruiter. Given the candidate profile, job description, and relevant context chunks, evaluate the candidate's fit.
+You are an expert technical recruiter. Evaluate only the technical skills from the job description.
+Use only the provided evidence chunks. Do not infer hidden skills. Do not give credit for a skill unless a chunk explicitly supports it.
 Return a JSON object with:
 - overall_match_summary (string, 2-3 sentences)
-- skill_matches (array of objects: {{skill, candidate_has, confidence, notes}})
+- skill_matches (array of objects: {{skill, candidate_has, confidence, notes, evidence, evidence_sources}})
 - experience_match (object: {{years_required, years_candidate, match_score float 0-1}})
 - strengths (array of strings, max 5)
 - gaps (array of strings, max 5)

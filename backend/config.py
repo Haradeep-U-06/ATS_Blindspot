@@ -13,9 +13,12 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 class Settings(BaseSettings):
-    gemini_api_key: Optional[str] = None
-    gemini_structuring_model: str = "gemini-2.0-flash"
-    gemini_evaluation_model: str = "gemini-2.0-flash"
+    openrouter_api_key: Optional[str] = None
+    openrouter_model: str = "meta-llama/llama-3.1-8b-instruct:free"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    groq_api_key: Optional[str] = None
+    groq_model: str = "llama-3.1-8b-instant"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
     ollama_model: str = "llama3"
     ollama_base_url: str = "http://localhost:11434"
 
@@ -34,10 +37,10 @@ class Settings(BaseSettings):
     rag_top_k: int = 5
 
     if SettingsConfigDict is not None:
-        model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+        model_config = SettingsConfigDict(env_file=str(BASE_DIR / ".env"), env_file_encoding="utf-8", extra="ignore")
     else:
         class Config:
-            env_file = ".env"
+            env_file = str(BASE_DIR / ".env")
             env_file_encoding = "utf-8"
             extra = "ignore"
 

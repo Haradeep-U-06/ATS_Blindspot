@@ -1,18 +1,26 @@
-import numpy as np
+import pytest
 
 from rag.chunker import chunk_text
 from rag.embedder import encode_texts
-from rag.faiss_store import FaissJobStore
-from rag.retriever import retrieve_relevant_chunks
+from rag.faiss_store import FaissJobStore, FaissResumeStore
+from pipeline.step8_rag import run_rag_for_resume
 
 
 def test_chunker_output_contains_metadata():
     text = "Python FastAPI MongoDB. " * 80
-    chunks = chunk_text(text, source_type="job", source_id="job_test", chunk_size=128, chunk_overlap=16)
+    chunks = chunk_text(
+        text,
+        source_type="resume_raw",
+        source_id="resume_test",
+        extra_metadata={"job_id": "job_test"},
+        chunk_size=128,
+        chunk_overlap=16,
+    )
 
     assert chunks
-    assert chunks[0]["metadata"]["source_type"] == "job"
-    assert chunks[0]["metadata"]["source_id"] == "job_test"
+    assert chunks[0]["metadata"]["source_type"] == "resume_raw"
+    assert chunks[0]["metadata"]["source_id"] == "resume_test"
+    assert chunks[0]["metadata"]["job_id"] == "job_test"
     assert len(chunks[0]["text"]) <= 128
 
 
@@ -31,15 +39,21 @@ def test_faiss_store_add_query_round_trip(tmp_path):
     assert "python" in results[0]["text"]
 
 
-def test_retriever_returns_context(tmp_path):
+@pytest.mark.asyncio
+async def test_per_resume_rag_returns_context(tmp_path):
     chunks = [
-        {"text": "must have python api experience", "metadata": {"source_type": "job", "source_id": "job2", "chunk_index": 0}},
-        {"text": "nice to have figma", "metadata": {"source_type": "job", "source_id": "job2", "chunk_index": 1}},
+        {"text": "candidate built python api experience", "metadata": {"source_type": "projects", "source_id": "resume2", "chunk_index": 0}},
+        {"text": "candidate used figma", "metadata": {"source_type": "resume_raw", "source_id": "resume2", "chunk_index": 1}},
     ]
-    store = FaissJobStore("job2", index_dir=str(tmp_path))
+    store = FaissResumeStore("resume2", index_dir=str(tmp_path))
     store.add(chunks, encode_texts([chunk["text"] for chunk in chunks]))
 
-    result = retrieve_relevant_chunks(job_id="job2", candidate_embedding=np.asarray(encode_texts(["python api"])[0]), store=store, top_k=2)
+    result = await run_rag_for_resume(
+        resume_id="resume2",
+        job={"job_id": "job2", "required_skills": [{"skill": "Python", "weight": 1.0}], "preferred_skills": []},
+        store=store,
+        top_k=2,
+    )
 
-    assert len(result["chunks"]) == 2
+    assert "Python" in result["evidence_by_skill"]
     assert result["context"]

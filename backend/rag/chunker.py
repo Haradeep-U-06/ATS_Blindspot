@@ -10,6 +10,7 @@ def chunk_text(
     *,
     source_type: str,
     source_id: str,
+    extra_metadata: Dict[str, Any] | None = None,
     chunk_size: int = 256,
     chunk_overlap: int = 32,
 ) -> List[Dict[str, Any]]:
@@ -41,6 +42,7 @@ def chunk_text(
                 "source_type": source_type,
                 "source_id": source_id,
                 "chunk_index": index,
+                **(extra_metadata or {}),
             },
         }
         for index, part in enumerate(parts)
