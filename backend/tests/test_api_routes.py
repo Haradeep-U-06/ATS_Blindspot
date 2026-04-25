@@ -1,5 +1,6 @@
 import httpx
 import pytest
+import respx
 
 from api.dependencies import get_db
 from db.models import ResumeStatus
@@ -150,6 +151,53 @@ async def test_upload_resume_and_status_flow(api_client):
     assert status_body["candidate_id"].startswith("candidate_")
     assert status_body["status"] == ResumeStatus.ready_for_evaluation.value
     assert status_body["chunk_count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_resume_pdf_endpoint_serves_validated_pdf_bytes(api_client):
+    client, db = api_client
+    cloudinary_url = "https://res.cloudinary.com/demo/image/upload/v1/resumes/resume_api"
+    await db.resumes.insert_one(
+        {
+            "resume_id": "resume_pdf",
+            "filename": "resume.pdf",
+            "cloudinary_url": cloudinary_url,
+            "status": ResumeStatus.completed.value,
+        }
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(cloudinary_url).mock(return_value=httpx.Response(404))
+        router.get(cloudinary_url.replace("/image/upload/", "/raw/upload/")).mock(
+            return_value=httpx.Response(200, content=b"%PDF-1.4\n%test\n", headers={"content-type": "application/pdf"})
+        )
+
+        response = await client.get("/resume/resume_pdf/pdf")
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"%PDF")
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.headers["content-disposition"] == 'inline; filename="resume.pdf"'
+
+
+@pytest.mark.asyncio
+async def test_resume_view_generates_pdf_from_extracted_text_when_storage_is_unavailable(api_client):
+    client, db = api_client
+    await db.resumes.insert_one(
+        {
+            "resume_id": "resume_text_view",
+            "filename": "resume.pdf",
+            "cloudinary_url": "mock://cloudinary/resume_text_view/resume.pdf",
+            "raw_text": "Jane Doe\nPython FastAPI MongoDB",
+            "status": ResumeStatus.completed.value,
+        }
+    )
+
+    response = await client.get("/resume/resume_text_view/view")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.content.startswith(b"%PDF")
 
 
 @pytest.mark.asyncio

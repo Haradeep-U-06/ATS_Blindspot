@@ -1,46 +1,28 @@
 import asyncio
 import io
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import HTTPException, UploadFile
 
-from config import settings
 from db.models import ResumeDocument, model_to_dict, new_id
 from logger import get_logger
 
 logger = get_logger(__name__)
 
+# Directory where resume files are saved on disk
+UPLOADS_DIR = Path(__file__).resolve().parent.parent / "uploads" / "resumes"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-async def _upload_to_cloudinary(raw_bytes: bytes, filename: str, resume_id: str) -> str:
-    if not (
-        settings.cloudinary_cloud_name
-        and settings.cloudinary_api_key
-        and settings.cloudinary_api_secret
-    ):
-        logger.warning("[WARN] Cloudinary credentials missing — using mock storage URL | resume_id=%s", resume_id)
-        return f"mock://cloudinary/{resume_id}/{filename}"
 
-    import cloudinary
-    import cloudinary.uploader
-
-    cloudinary.config(
-        cloud_name=settings.cloudinary_cloud_name,
-        api_key=settings.cloudinary_api_key,
-        api_secret=settings.cloudinary_api_secret,
-        secure=True,
-    )
-
-    def _call() -> Dict[str, Any]:
-        return cloudinary.uploader.upload(
-            io.BytesIO(raw_bytes),
-            resource_type="raw",
-            public_id=f"resumes/{resume_id}",
-            filename=filename,
-            overwrite=True,
-        )
-
-    result = await asyncio.to_thread(_call)
-    return result.get("secure_url") or result.get("url")
+async def _save_to_local(raw_bytes: bytes, filename: str, resume_id: str) -> str:
+    """Save resume bytes to local disk and return the backend URL to serve it."""
+    suffix = Path(filename).suffix.lower() or ".pdf"
+    local_path = UPLOADS_DIR / f"{resume_id}{suffix}"
+    await asyncio.to_thread(local_path.write_bytes, raw_bytes)
+    logger.info("[STORAGE] Saved file locally | path=%s", local_path)
+    # Return a backend-served URL that the frontend will use
+    return f"http://localhost:8000/resume/{resume_id}/pdf"
 
 
 async def ingest_resume(file: UploadFile, db: Any) -> Dict[str, Any]:
@@ -54,25 +36,24 @@ async def ingest_resume(file: UploadFile, db: Any) -> Dict[str, Any]:
     size = len(raw_bytes)
     if size == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
-    if size > settings.max_resume_size_bytes:
-        raise HTTPException(status_code=413, detail="Resume exceeds 10MB limit")
 
     logger.info("[INFO] File validated | filename=%s | size=%sKB", filename, max(1, size // 1024))
     resume_id = new_id("resume")
-    logger.info("[INFO] Uploading to Cloudinary...")
-    cloudinary_url = await _upload_to_cloudinary(raw_bytes, filename, resume_id)
-    logger.info("[SUCCESS] Resume stored | resume_id=%s | url=%s", resume_id, cloudinary_url)
+
+    logger.info("[INFO] Saving resume to local disk | resume_id=%s", resume_id)
+    file_url = await _save_to_local(raw_bytes, filename, resume_id)
+    logger.info("[SUCCESS] Resume stored locally | resume_id=%s", resume_id)
 
     document = ResumeDocument(
         resume_id=resume_id,
         filename=filename,
-        cloudinary_url=cloudinary_url,
+        cloudinary_url=file_url,   # reusing the existing field — now points to local URL
     )
     await db.resumes.insert_one(model_to_dict(document))
     logger.info("[INFO] MongoDB record created | status=uploaded | resume_id=%s", resume_id)
     return {
         "resume_id": resume_id,
-        "cloudinary_url": cloudinary_url,
+        "cloudinary_url": file_url,
         "raw_bytes": raw_bytes,
         "filename": filename,
     }

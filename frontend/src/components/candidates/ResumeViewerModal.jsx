@@ -1,11 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, FileText, Download, ExternalLink, Loader2, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
-
-/* ── helpers ────────────────────────────────────────────────────── */
-
-function isPdf(filename) {
-  return (filename || '').toLowerCase().endsWith('.pdf');
-}
+import { X, FileText, Download, ExternalLink, Loader2, AlertTriangle } from 'lucide-react';
 
 /* ── Raw-text viewer (fallback) ─────────────────────────────────── */
 
@@ -33,34 +27,25 @@ function RawTextViewer({ text, filename }) {
 /* ── PDF viewer ─────────────────────────────────────────────────── */
 
 function PdfViewer({ url, filename }) {
-  const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // We use the Google Docs viewer as a fallback wrapper to ensure maximum compatibility
+  // though direct iframe for image/upload usually works fine.
+  const viewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`;
+
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {loading && !error && (
-        <div className="flex-1 flex items-center justify-center gap-3 text-mid">
+    <div className="flex-1 flex flex-col overflow-hidden relative">
+      {loading && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center gap-3 bg-white text-mid">
           <Loader2 className="w-5 h-5 animate-spin text-primary" />
-          <span className="text-sm">Loading PDF…</span>
-        </div>
-      )}
-      {error && (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-mid py-16">
-          <AlertTriangle className="w-10 h-10 text-warning opacity-60" />
-          <p className="text-sm font-medium text-dark">Unable to render PDF inline</p>
-          <p className="text-xs text-mid/60 text-center max-w-xs">
-            Your browser may be blocking embedded PDFs from Cloudinary.<br />
-            Use the "Open PDF" button above to view it directly.
-          </p>
+          <span className="text-sm">Loading Preview...</span>
         </div>
       )}
       <iframe
-        key={url}
-        src={`${url}#toolbar=1&view=FitH`}
+        src={viewerUrl}
         title={filename}
-        className={`flex-1 w-full border-0 ${loading || error ? 'hidden' : 'block'}`}
+        className="flex-1 w-full border-0"
         onLoad={() => setLoading(false)}
-        onError={() => { setError(true); setLoading(false); }}
       />
     </div>
   );
@@ -75,6 +60,9 @@ export function ResumeViewerModal({ resumeId, candidateName, onClose, resumeData
   const { filename, cloudinary_url: pdfUrl, raw_text: rawText } = resumeData || {};
   const hasPdf  = Boolean(pdfUrl);
   const hasText = Boolean(rawText);
+
+  // The pdfUrl is now always http://localhost:8000/resume/{id}/pdf — no proxy needed
+  const proxyUrl = pdfUrl || null;
 
   // Default to text view if no PDF
   useEffect(() => {
@@ -105,7 +93,7 @@ export function ResumeViewerModal({ resumeId, candidateName, onClose, resumeData
       onClick={handleOverlayClick}
       className="fixed inset-0 z-50 flex items-center justify-center bg-dark/60 backdrop-blur-sm p-4 animate-fade-in"
     >
-      <div className="w-full max-w-4xl h-[90vh] flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
+      <div className="w-full max-w-4xl h-[90vh] flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden animate-slide-up border border-white/20">
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-mid/10 bg-light/50 shrink-0">
@@ -122,16 +110,16 @@ export function ResumeViewerModal({ resumeId, candidateName, onClose, resumeData
           {/* View toggle */}
           <div className="flex items-center gap-3 shrink-0">
             {hasPdf && hasText && (
-              <div className="flex rounded-xl border border-mid/15 overflow-hidden text-xs font-semibold">
+              <div className="flex rounded-xl border border-mid/15 overflow-hidden text-xs font-semibold bg-white">
                 <button
                   onClick={() => setActiveView('pdf')}
-                  className={`px-3 py-1.5 transition-colors ${activeView === 'pdf' ? 'bg-primary text-white' : 'text-mid hover:text-dark'}`}
+                  className={`px-4 py-1.5 transition-all ${activeView === 'pdf' ? 'bg-primary text-white shadow-sm' : 'text-mid hover:text-dark'}`}
                 >
                   PDF View
                 </button>
                 <button
                   onClick={() => setActiveView('text')}
-                  className={`px-3 py-1.5 transition-colors ${activeView === 'text' ? 'bg-primary text-white' : 'text-mid hover:text-dark'}`}
+                  className={`px-4 py-1.5 transition-all ${activeView === 'text' ? 'bg-primary text-white shadow-sm' : 'text-mid hover:text-dark'}`}
                 >
                   Text View
                 </button>
@@ -139,26 +127,26 @@ export function ResumeViewerModal({ resumeId, candidateName, onClose, resumeData
             )}
 
             {/* Actions */}
-            {pdfUrl && (
-              <a
-                href={pdfUrl}
-                target="_blank"
-                rel="noreferrer"
-                download={filename}
-                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" /> Download
-              </a>
-            )}
-            {pdfUrl && (
-              <a
-                href={pdfUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl bg-mid/8 text-mid hover:bg-mid/15 hover:text-dark transition-colors"
-              >
-                <ExternalLink className="w-3.5 h-3.5" /> Open PDF
-              </a>
+            {proxyUrl && (
+              <div className="flex items-center gap-2">
+                <a
+                  href={proxyUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  download={filename}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" /> Download
+                </a>
+                <a
+                  href={proxyUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl bg-mid/8 text-mid hover:bg-mid/15 hover:text-dark transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Open PDF
+                </a>
+              </div>
             )}
 
             <button
@@ -172,7 +160,7 @@ export function ResumeViewerModal({ resumeId, candidateName, onClose, resumeData
         </div>
 
         {/* ── Body ── */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden bg-mid/5">
           {!hasPdf && !hasText && (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-mid py-16">
               <AlertTriangle className="w-10 h-10 text-warning opacity-50" />

@@ -154,30 +154,67 @@ function GitHubRepoCard({ repo }) {
 function EvidenceChunkCard({ chunk, idx }) {
   const text = chunk.text || (typeof chunk === 'string' ? chunk : JSON.stringify(chunk));
   if (!text) return null;
+  const commentary = chunk.llm_commentary || '';
+  const source = chunk.source || chunk.metadata?.source_type || null;
+  const similarity = chunk.similarity != null ? Math.round(chunk.similarity * 100) : null;
+  const matchedKeywords = Array.isArray(chunk.matched_keywords)
+    ? chunk.matched_keywords
+    : typeof chunk.matched_keywords === 'string'
+      ? chunk.matched_keywords.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+
   return (
     <div className="flex gap-4 p-5 rounded-xl border border-mid/10 bg-white/60 hover:bg-white/90 transition-all">
       <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
         <span className="text-xs font-bold text-primary">{idx + 1}</span>
       </div>
       <div className="flex-1 min-w-0">
+        {commentary && (
+          <div className="mb-2 flex items-start gap-2 bg-primary/5 border border-primary/15 rounded-lg px-3 py-2">
+            <span className="text-primary mt-0.5 text-xs">✦</span>
+            <p className="text-xs font-medium text-primary/90 leading-relaxed italic">{commentary}</p>
+          </div>
+        )}
         <p className="text-[15px] text-dark leading-relaxed whitespace-pre-wrap break-words">{text}</p>
+
+        {/* Citation bar */}
         <div className="flex flex-wrap gap-2 mt-3">
-          {chunk.source && (
-            <span className="text-[11px] font-mono text-mid/80 bg-light px-2.5 py-1 rounded border border-mid/10 uppercase tracking-wider">
-              {chunk.source}
+          {/* Source citation */}
+          {source && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-mono text-mid/80 bg-light px-2.5 py-1 rounded border border-mid/10 uppercase tracking-wider">
+              📄 {source.replace(/_/g, ' ')}
+            </span>
+          )}
+          {/* Chunk index */}
+          <span className="text-[11px] font-mono text-mid/60 bg-light/60 px-2.5 py-1 rounded border border-mid/10">
+            Chunk #{chunk.metadata?.chunk_index ?? idx}
+          </span>
+          {/* Similarity score */}
+          {similarity != null && (
+            <span className="text-[11px] font-mono text-secondary/90 bg-secondary/10 px-2.5 py-1 rounded border border-secondary/20">
+              Match: {similarity}%
             </span>
           )}
           {chunk.confidence != null && (
-            <span className="text-[11px] font-mono text-primary/90 bg-primary/10 px-2.5 py-1 rounded border border-primary/20 uppercase tracking-wider">
+            <span className="text-[11px] font-mono text-primary/90 bg-primary/10 px-2.5 py-1 rounded border border-primary/20">
               Confidence: {Math.round((chunk.confidence || 0) * 100)}%
             </span>
           )}
-          {chunk.similarity != null && (
-            <span className="text-[11px] font-mono text-secondary/90 bg-secondary/10 px-2.5 py-1 rounded border border-secondary/20 uppercase tracking-wider">
-              Match: {Math.round((chunk.similarity || 0) * 100)}%
-            </span>
-          )}
         </div>
+
+        {/* Skills extracted from this chunk */}
+        {matchedKeywords.length > 0 && (
+          <div className="mt-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-mid/60 mb-1.5">Skills in this chunk</p>
+            <div className="flex flex-wrap gap-1.5">
+              {matchedKeywords.map((kw, i) => (
+                <span key={i} className="text-[11px] font-medium bg-primary/10 text-primary px-2 py-0.5 rounded-full border border-primary/20">
+                  {kw}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -195,18 +232,30 @@ export function CandidateDashboardPage() {
   const [resumeLoading, setResumeLoading] = useState(false);
 
   const handleViewResume = async () => {
-    if (resumeData) { setShowResume(true); return; }
-    const resumeId = data?.resume_id;
-    if (!resumeId) { setShowResume(true); return; }
-    setResumeLoading(true);
-    try {
-      const result = await api.getResumeContent(resumeId);
-      setResumeData(result);
-    } catch (err) {
-      // Fallback: use parsed text from dashboard payload
-      setResumeData({ raw_text: data?.resume_text || data?.parsed_text || '', filename: 'resume.pdf' });
-    } finally {
-      setResumeLoading(false);
+    // Fetch the resume_id if we don't have it cached yet
+    let currentData = resumeData;
+    if (!currentData) {
+      const resumeId = data?.resume_id;
+      if (!resumeId) return;
+      setResumeLoading(true);
+      try {
+        currentData = await api.getResumeContent(resumeId);
+        setResumeData(currentData);
+      } catch (err) {
+        currentData = { raw_text: data?.resume_text || data?.parsed_text || '', filename: 'resume.pdf' };
+        setResumeData(currentData);
+      } finally {
+        setResumeLoading(false);
+      }
+    }
+
+    const resumeId = currentData?.resume_id || data?.resume_id;
+    if (resumeId) {
+      // Open directly via the local backend PDF endpoint — no proxy needed
+      window.open(`http://localhost:8000/resume/${resumeId}/pdf`, '_blank');
+    } else if (currentData?.cloudinary_url) {
+      window.open(currentData.cloudinary_url, '_blank');
+    } else {
       setShowResume(true);
     }
   };
@@ -231,7 +280,21 @@ export function CandidateDashboardPage() {
   const email         = summary?.email || data?.email || '';
   const score         = data?.final_score ?? data?.score ?? 0;
   const recommendation = data?.recommendation || 'Not Evaluated';
-  const links         = summary?.external_profiles || data?.external_profiles || {};
+  const links         = (() => {
+    // external_profiles is a structured object {github: {username, ...}, leetcode: {...}}
+    // We extract the username string for each platform for URL building
+    const ep = summary?.external_profiles || data?.external_profiles || {};
+    const result = {};
+    const platformKeys = ['github', 'leetcode', 'codeforces', 'codechef'];
+    platformKeys.forEach(platform => {
+      const val = ep[platform];
+      if (!val) return;
+      // val could be a string (username) or an object {username, ...}
+      if (typeof val === 'string') result[platform] = val;
+      else if (typeof val === 'object' && val.username) result[platform] = val.username;
+    });
+    return result;
+  })();
   const resumeSummary = summary?.resume_summary || (typeof data?.summary === 'string' ? data.summary : '') || '';
   const resumeText    = data?.resume_text || data?.parsed_text || data?.text || summary?.resume_text || '';
   const skillScores   = Array.isArray(data?.skill_scores)  ? data.skill_scores  : [];
@@ -334,17 +397,28 @@ export function CandidateDashboardPage() {
 
             {/* Resume viewer button */}
             <div className="px-6 py-5">
-              <button
-                onClick={handleViewResume}
-                disabled={resumeLoading}
-                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-mid transition-colors shadow-sm hover:shadow-md active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {resumeLoading ? (
-                  <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Loading…</>
-                ) : (
-                  <><FileText className="w-4 h-4" /> View Resume</>
-                )}
-              </button>
+              {data?.resume_id ? (
+                <a
+                  href={api.getResumeViewUrl(data.resume_id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-mid transition-colors shadow-sm hover:shadow-md active:scale-[0.98]"
+                >
+                  <FileText className="w-4 h-4" /> View Resume
+                </a>
+              ) : (
+                <button
+                  onClick={handleViewResume}
+                  disabled={resumeLoading}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-mid transition-colors shadow-sm hover:shadow-md active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {resumeLoading ? (
+                    <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Loading…</>
+                  ) : (
+                    <><FileText className="w-4 h-4" /> View Resume</>
+                  )}
+                </button>
+              )}
             </div>
           </Card>
         </div>
@@ -405,48 +479,27 @@ export function CandidateDashboardPage() {
                     )}
                   </div>
                 </Card>
-
-                <Card className="!p-0 overflow-hidden">
-                  <div className="px-6 py-4 bg-warning/8 border-b border-warning/15 flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-warning/20 flex items-center justify-center">
-                      <AlertTriangle className="w-4 h-4 text-warning" />
-                    </div>
-                    <h3 className="font-heading font-semibold text-dark">Areas for Improvement</h3>
-                    <span className="ml-auto text-xs font-mono bg-warning/15 text-warning px-2 py-0.5 rounded-full">
-                      {weaknesses.length}
-                    </span>
-                  </div>
-                  <div className="p-6 space-y-3">
-                    {weaknesses.length > 0 ? weaknesses.map((w, i) => (
-                      <div key={i} className="flex items-start gap-3">
-                        <div className="w-5 h-5 rounded-full bg-warning/15 flex items-center justify-center flex-shrink-0 mt-0.5">
-                          <AlertTriangle className="w-3 h-3 text-warning" />
-                        </div>
-                        <span className="text-[15px] text-dark/85 leading-relaxed">{w}</span>
-                      </div>
-                    )) : (
-                      <p className="text-sm text-mid/60 italic">No specific areas listed.</p>
-                    )}
-                  </div>
-                </Card>
               </div>
             </div>
           )}
 
-          {/* ── SKILLS TAB ── */}
           {activeTab === 'skills' && (
             <Card className="!p-8">
-              <SectionHeader title="Skill Evaluation" subtitle={`${skillScores.length} skills evaluated by the AI pipeline`} />
+              <SectionHeader title="Skill Evaluation" subtitle={`${skillScores.length} skills evaluated using resume evidence`} />
               {skillScores.length > 0 ? (
                 <div className="grid md:grid-cols-2 gap-x-14 gap-y-1">
                   {[...skillScores]
                     .sort((a, b) => (b.score || 0) - (a.score || 0))
                     .map((skill, i) => (
-                      <SkillScoreBar
-                        key={i}
-                        label={skill.skill || skill.name || `Skill ${i + 1}`}
-                        score={skill.score}
-                      />
+                      <div key={i}>
+                        <SkillScoreBar
+                          label={skill.skill || skill.name || `Skill ${i + 1}`}
+                          score={skill.score}
+                        />
+                        {skill.reason && (
+                          <p className="text-xs text-mid/70 italic ml-1 -mt-1 mb-2 leading-relaxed">{skill.reason}</p>
+                        )}
+                      </div>
                     ))}
                 </div>
               ) : (

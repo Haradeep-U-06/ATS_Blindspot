@@ -117,20 +117,22 @@ async def persist_results(
         resume_id=resume_id,
         job_id=job_id,
         final_score=score_result.final_score,
+        ats_score=score_result.ats_score,
+        rag_score=score_result.rag_score,
+        keyword_score=score_result.keyword_score,
+        confidence_score=score_result.confidence_score,
         base_score=score_result.base_score,
         preferred_bonus=score_result.preferred_bonus,
         experience_score=score_result.experience_score,
-        enrichment_score=score_result.enrichment_score,
+        problem_solving_score=score_result.problem_solving_score,
+        consistency_score=score_result.consistency_score,
         penalties=score_result.penalties,
-        recommendation=evaluation.get("recommendation", "unknown"),
-        strengths=evaluation.get("strengths", []),
-        gaps=evaluation.get("gaps", []),
-        skill_matches=evaluation.get("skill_matches", []),
-        evidence_chunks={
-            item.get("skill", ""): item.get("evidence", [])
-            for item in evaluation.get("skill_matches", []) or []
-        },
-        overall_explanation=evaluation.get("overall_match_summary", ""),
+        recommendation=score_result.subscores_detail.get("recommendation", "unknown"),
+        strengths=score_result.subscores_detail.get("matched_keywords", []),
+        gaps=[],
+        skill_matches=[],
+        evidence_chunks={"top_chunks": score_result.subscores_detail.get("top_chunks", [])},
+        overall_explanation="Determined mathematically via unified scoring pipeline.",
         subscores_detail={**score_result.subscores_detail, "jd_embedding_b64": jd_embedding_b64},
     )
     logger.info("[INFO] Writing score | score=%.2f | job_id=%s", score_doc.final_score, job_id)

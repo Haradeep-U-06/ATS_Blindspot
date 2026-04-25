@@ -8,7 +8,12 @@ async def score_candidate(
     *,
     candidate_profile: Dict[str, Any],
     job: Dict[str, Any],
-    evaluation: Dict[str, Any],
+    all_chunks: list[Dict[str, Any]] | None = None,
     engine: ScoreEngine | None = None,
 ) -> ScoreResult:
-    return (engine or ScoreEngine()).compute(candidate_profile, job, evaluation)
+    return (engine or ScoreEngine()).compute(
+        candidate_profile=candidate_profile, 
+        jd_structured=job, 
+        evaluation_result={}, 
+        all_chunks=all_chunks
+    )

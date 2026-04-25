@@ -38,4 +38,8 @@ export const api = {
   getCandidateDashboard: (jobId, candidateId) => fetcher(`${BASE}/jobs/${jobId}/candidates/${candidateId}`),
 
   getResumeContent: (resumeId) => fetcher(`${BASE}/resume/${resumeId}`),
+
+  getResumePdfUrl: (resumeId) => `${BASE}/resume/${resumeId}/pdf`,
+
+  getResumeViewUrl: (resumeId) => `${BASE}/resume/${resumeId}/view`,
 };

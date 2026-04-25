@@ -111,10 +111,15 @@ class ScoreDocument(BaseModel):
     resume_id: Optional[str] = None
     job_id: str
     final_score: float
+    ats_score: float = 0.0
+    rag_score: float = 0.0
+    keyword_score: float = 0.0
+    confidence_score: float = 0.0
     base_score: float
     preferred_bonus: float
     experience_score: float
-    enrichment_score: float
+    problem_solving_score: float = 0.0
+    consistency_score: float = 0.0
     penalties: float
     recommendation: str
     strengths: List[str] = Field(default_factory=list)
@@ -146,9 +151,14 @@ class JobDocument(BaseModel):
 
 class ScoreResult(BaseModel):
     final_score: float
+    ats_score: float = 0.0
+    rag_score: float = 0.0
+    keyword_score: float = 0.0
+    confidence_score: float = 0.0
     base_score: float
     preferred_bonus: float
     experience_score: float
-    enrichment_score: float
+    problem_solving_score: float = 0.0
+    consistency_score: float = 0.0
     penalties: float
     subscores_detail: Dict[str, Any] = Field(default_factory=dict)

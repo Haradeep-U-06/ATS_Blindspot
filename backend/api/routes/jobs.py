@@ -6,11 +6,16 @@ from pydantic import BaseModel, Field
 
 from api.dependencies import get_db, get_hr_user_id, serialize_mongo
 from api.routes.candidates import _build_external_profiles_summary
+from llm.dashboard_insights import generate_dashboard_insights
+from llm.router import LLMRouter
 from pipeline.orchestrator import EVALUATABLE_RESUME_STATUSES, run_job_evaluation
 from pipeline.step12_rank import _score_breakdown, _structured_resume_summary, rank_candidates
 from pipeline.step6_process_jd import create_job_record
+from logger import get_logger
 
+logger = get_logger(__name__)
 router = APIRouter(tags=["jobs"])
+_llm = LLMRouter()
 
 
 class JobCreateRequest(BaseModel):
@@ -177,8 +182,57 @@ async def get_candidate_dashboard(job_id: str, candidate_id: str, db: Any = Depe
     if not score:
         raise HTTPException(status_code=404, detail="score not found for candidate/job")
 
-    # Build structured external profiles (GitHub repos, LeetCode stats, etc.)
+    # ── LLM Insights: use cache or generate fresh ───────────────────────────
+    cached_insights = score.get("llm_insights")
+    if cached_insights:
+        logger.info("[DASHBOARD] Using cached LLM insights | candidate=%s", candidate_id)
+        insights = cached_insights
+    else:
+        logger.info("[DASHBOARD] Generating LLM insights | candidate=%s", candidate_id)
+        insights = await generate_dashboard_insights(
+            job=job,
+            candidate=candidate,
+            score=score,
+            llm=_llm,
+        )
+        # Persist so next load is instant
+        await db.scores.update_one(
+            {"job_id": job_id, "candidate_id": candidate_id},
+            {"$set": {"llm_insights": insights}},
+        )
+
+    # ── Build structured external profiles ──────────────────────────────────
     external_profiles = _build_external_profiles_summary(candidate)
+
+    # ── Fallback resume summary ──────────────────────────────────────────────
+    resume_summary = insights.get("summary") or _structured_resume_summary(candidate)
+    if not resume_summary:
+        resume_summary = candidate.get("summary", "")
+    if not resume_summary:
+        resume = await db.resumes.find_one({"resume_id": candidate.get("resume_id")})
+        if resume and resume.get("raw_text"):
+            raw_text = resume.get("raw_text", "")
+            resume_summary = (raw_text[:800] + "...") if len(raw_text) > 800 else raw_text
+
+    # ── Enrich evidence chunks with LLM commentary + per-chunk skills ────────
+    evidence_chunks = score.get("evidence_chunks") or {}
+    top_chunks = evidence_chunks.get("top_chunks") or []
+    commentary_map = {
+        c.get("chunk_index", i): c.get("commentary", "")
+        for i, c in enumerate(insights.get("evidence_commentary") or [])
+        if isinstance(c, dict)
+    }
+    # Global matched keywords from RAG scorer (verified skills found in the resume)
+    global_keywords = (score.get("subscores_detail") or {}).get("matched_keywords") or score.get("strengths") or []
+    for i, chunk in enumerate(top_chunks):
+        if isinstance(chunk, dict):
+            chunk["llm_commentary"] = commentary_map.get(i, "")
+            # Attach per-chunk matched keywords: intersect the chunk text with global keywords
+            chunk_text_lower = (chunk.get("text") or "").lower()
+            chunk["matched_keywords"] = [
+                kw for kw in global_keywords
+                if isinstance(kw, str) and kw.lower() in chunk_text_lower
+            ]
 
     payload = {
         "job_id": job_id,
@@ -188,21 +242,22 @@ async def get_candidate_dashboard(job_id: str, candidate_id: str, db: Any = Depe
             "name": candidate.get("name", ""),
             "email": candidate.get("email", ""),
             "phone": candidate.get("phone", ""),
-            "resume_summary": candidate.get("summary", ""),
+            "resume_summary": resume_summary,
         },
-        "resume_summary": _structured_resume_summary(candidate),
+        "resume_summary": resume_summary,
+        # Score is ALWAYS the math-based value — never from LLM
         "final_score": score.get("final_score", 0),
         "recommendation": score.get("recommendation", "Not Evaluated"),
-        "skill_scores": (score.get("subscores_detail", {}) or {}).get("skill_scores", []),
+        # Qualitative fields from LLM
+        "skill_scores": insights.get("skill_scores") or [],
         "skill_matches": score.get("skill_matches", []),
-        "evidence_chunks": score.get("evidence_chunks", {}),
-        "pros": score.get("strengths", []),
-        "cons": score.get("gaps", []),
-        "strengths": score.get("strengths", []),
-        "weaknesses": score.get("gaps", []),
+        "evidence_chunks": {"top_chunks": top_chunks},
+        "pros": insights.get("strengths") or score.get("strengths", []),
+        "cons": insights.get("weaknesses") or [],
+        "strengths": insights.get("strengths") or score.get("strengths", []),
+        "weaknesses": insights.get("weaknesses") or [],
         "explanation": score.get("overall_explanation", ""),
         "score_breakdown": _score_breakdown(score),
-        # Structured external platform data — used by Platform Profiles tab
         "external_profiles": external_profiles,
     }
     return serialize_mongo(payload)

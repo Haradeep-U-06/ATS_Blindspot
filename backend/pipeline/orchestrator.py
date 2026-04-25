@@ -166,22 +166,15 @@ async def _evaluate_one_resume(
         resume_id,
         lambda: run_rag_for_resume(resume_id=resume_id, job=job),
     )
-    evaluation = await _run_step(
-        "Scoring candidate evidence with LLM",
-        resume_id,
-        lambda: evaluate_candidate(
-            resume_id=resume_id,
-            candidate_profile=candidate,
-            job=job,
-            rag_context=rag_result["context"],
-            rag_evidence=rag_result,
-            llm_router=router,
-        ),
-    )
+    evaluation = {}
     score_result = await _run_step(
         "Computing final score",
         resume_id,
-        lambda: score_candidate(candidate_profile=candidate, job=job, evaluation=evaluation),
+        lambda: score_candidate(
+            candidate_profile=candidate, 
+            job=job, 
+            all_chunks=rag_result.get("all_chunks", [])
+        ),
     )
     persisted = await _run_step(
         "Persisting score",

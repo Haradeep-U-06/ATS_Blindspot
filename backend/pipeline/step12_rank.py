@@ -5,14 +5,70 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 
-def _structured_resume_summary(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "headline": candidate.get("summary", ""),
-        "experience": candidate.get("experience", []),
-        "projects": candidate.get("projects", []),
-        "education": candidate.get("education", []),
-        "certifications": candidate.get("certifications", []),
-    }
+def _structured_resume_summary(candidate: Dict[str, Any]) -> str:
+    """Build a plain-text resume summary string for frontend rendering."""
+    parts = []
+
+    headline = candidate.get("summary", "")
+    if headline:
+        parts.append(headline)
+
+    experience = candidate.get("experience", [])
+    if experience:
+        exp_lines = []
+        for e in experience[:3]:
+            if isinstance(e, dict):
+                title = e.get("title") or e.get("role") or ""
+                company = e.get("company") or e.get("employer") or ""
+                duration = e.get("duration") or e.get("dates") or e.get("period") or ""
+                line = " | ".join(filter(None, [title, company, duration]))
+            else:
+                line = str(e)
+            if line:
+                exp_lines.append(line)
+        if exp_lines:
+            parts.append("Experience: " + "; ".join(exp_lines))
+
+    projects = candidate.get("projects", [])
+    if projects:
+        proj_names = []
+        for p in projects[:3]:
+            if isinstance(p, dict):
+                proj_names.append(p.get("name") or p.get("title") or "")
+            else:
+                proj_names.append(str(p))
+        proj_names = [n for n in proj_names if n]
+        if proj_names:
+            parts.append("Projects: " + ", ".join(proj_names))
+
+    education = candidate.get("education", [])
+    if education:
+        edu_lines = []
+        for edu in education[:2]:
+            if isinstance(edu, dict):
+                degree = edu.get("degree") or ""
+                institution = edu.get("institution") or edu.get("school") or ""
+                line = " from ".join(filter(None, [degree, institution]))
+            else:
+                line = str(edu)
+            if line:
+                edu_lines.append(line)
+        if edu_lines:
+            parts.append("Education: " + "; ".join(edu_lines))
+
+    certifications = candidate.get("certifications", [])
+    if certifications:
+        cert_names = []
+        for c in certifications[:3]:
+            if isinstance(c, dict):
+                cert_names.append(c.get("name") or c.get("title") or "")
+            else:
+                cert_names.append(str(c))
+        cert_names = [n for n in cert_names if n]
+        if cert_names:
+            parts.append("Certifications: " + ", ".join(cert_names))
+
+    return " | ".join(parts) if parts else ""
 
 
 def _score_breakdown(score: Dict[str, Any]) -> Dict[str, Any]:
