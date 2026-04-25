@@ -65,3 +65,18 @@ async def get_resume_status(resume_id: str, db: Any = Depends(get_db)) -> dict:
     if not resume:
         raise HTTPException(status_code=404, detail="resume_id not found")
     return serialize_mongo(resume)
+
+
+@router.get("/resume/{resume_id}")
+async def get_resume_content(resume_id: str, db: Any = Depends(get_db)) -> dict:
+    """Return PDF URL + extracted text so the frontend can display the resume."""
+    resume = await db.resumes.find_one({"resume_id": resume_id})
+    if not resume:
+        raise HTTPException(status_code=404, detail="resume_id not found")
+    return serialize_mongo({
+        "resume_id":      resume_id,
+        "filename":       resume.get("filename", "resume.pdf"),
+        "cloudinary_url": resume.get("cloudinary_url"),
+        "raw_text":       resume.get("raw_text"),
+        "status":         resume.get("status"),
+    })

@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_db, get_hr_user_id, serialize_mongo
+from api.routes.candidates import _build_external_profiles_summary
 from pipeline.orchestrator import EVALUATABLE_RESUME_STATUSES, run_job_evaluation
 from pipeline.step12_rank import _score_breakdown, _structured_resume_summary, rank_candidates
 from pipeline.step6_process_jd import create_job_record
@@ -175,6 +176,10 @@ async def get_candidate_dashboard(job_id: str, candidate_id: str, db: Any = Depe
     score = await db.scores.find_one({"job_id": job_id, "candidate_id": candidate_id})
     if not score:
         raise HTTPException(status_code=404, detail="score not found for candidate/job")
+
+    # Build structured external profiles (GitHub repos, LeetCode stats, etc.)
+    external_profiles = _build_external_profiles_summary(candidate)
+
     payload = {
         "job_id": job_id,
         "candidate_id": candidate_id,
@@ -184,15 +189,10 @@ async def get_candidate_dashboard(job_id: str, candidate_id: str, db: Any = Depe
             "email": candidate.get("email", ""),
             "phone": candidate.get("phone", ""),
             "resume_summary": candidate.get("summary", ""),
-            "external_profiles": {
-                "github": candidate.get("github_username"),
-                "leetcode": candidate.get("leetcode_username"),
-                "codeforces": candidate.get("codeforces_username"),
-                "codechef": candidate.get("codechef_username"),
-            },
         },
         "resume_summary": _structured_resume_summary(candidate),
         "final_score": score.get("final_score", 0),
+        "recommendation": score.get("recommendation", "Not Evaluated"),
         "skill_scores": (score.get("subscores_detail", {}) or {}).get("skill_scores", []),
         "skill_matches": score.get("skill_matches", []),
         "evidence_chunks": score.get("evidence_chunks", {}),
@@ -202,5 +202,7 @@ async def get_candidate_dashboard(job_id: str, candidate_id: str, db: Any = Depe
         "weaknesses": score.get("gaps", []),
         "explanation": score.get("overall_explanation", ""),
         "score_breakdown": _score_breakdown(score),
+        # Structured external platform data — used by Platform Profiles tab
+        "external_profiles": external_profiles,
     }
     return serialize_mongo(payload)

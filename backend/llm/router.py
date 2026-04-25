@@ -27,7 +27,7 @@ class LLMRouter:
         *,
         task: str = "structuring",
         model_name: Optional[str] = None,
-        temperature: float = 0.2,
+        temperature: float = 0.0,
     ) -> str:
         last_error: Exception | None = None
         providers = [

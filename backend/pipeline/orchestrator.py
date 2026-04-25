@@ -138,8 +138,24 @@ async def _evaluate_one_resume(
     router: LLMRouter,
     resume: Dict[str, Any],
     job: Dict[str, Any],
+    force: bool = False,
 ) -> Dict[str, Any]:
     resume_id = resume["resume_id"]
+    job_id    = job["job_id"]
+
+    # ── Score cache: skip LLM re-evaluation if a valid score already exists ──
+    if not force:
+        existing_score = await database.scores.find_one(
+            {"resume_id": resume_id, "job_id": job_id, "final_score": {"$gt": 0}}
+        )
+        if existing_score:
+            logger.info(
+                "[CACHE] Valid score found — skipping re-evaluation | resume_id=%s | cached_score=%.2f",
+                resume_id, existing_score.get("final_score", 0),
+            )
+            await _update_resume_status(database, resume_id, ResumeStatus.completed)
+            return {"candidate_id": existing_score.get("candidate_id"), "score": existing_score}
+
     await _update_resume_status(database, resume_id, ResumeStatus.evaluating)
     candidate = await database.candidates.find_one({"resume_id": resume_id})
     if not candidate:
@@ -174,7 +190,7 @@ async def _evaluate_one_resume(
             db=database,
             resume_id=resume_id,
             candidate_profile=candidate,
-            job_id=job["job_id"],
+            job_id=job_id,
             evaluation=evaluation,
             score_result=score_result,
         ),

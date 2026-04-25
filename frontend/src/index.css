@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Playfair+Display:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: rgb(154, 177, 122);
+  --color-secondary: rgb(195, 204, 155);
+  --color-soft: rgb(228, 223, 181);
+  --color-cream: rgb(251, 232, 206);
+  --color-dark: #2c2f24;
+  --color-mid: #5a6147;
+  --color-light: #f9f5ee;
+  --color-error: #c0392b;
+  --color-warning: #d4851a;
+  --color-success: rgb(154, 177, 122);
+}
+
+body {
+  background-color: var(--color-cream);
+  background-image: 
+    radial-gradient(circle at 15% 50%, rgba(251, 232, 206, 1) 0%, transparent 50%),
+    radial-gradient(circle at 85% 30%, rgba(228, 223, 181, 0.4) 0%, transparent 50%);
+  background-attachment: fixed;
+  color: var(--color-dark);
+  font-family: 'DM Sans', sans-serif;
+  margin: 0;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Playfair Display', serif;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+@layer utilities {
+  .animate-delay-100 { animation-delay: 100ms; }
+  .animate-delay-200 { animation-delay: 200ms; }
+  .animate-delay-300 { animation-delay: 300ms; }
+  .animate-delay-400 { animation-delay: 400ms; }
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-slide-up {
+  animation: fadeSlideUp 0.6s ease-out forwards;
+  opacity: 0;
+}
